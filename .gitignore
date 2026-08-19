@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+test_runs/
+work/*.xml
+work/*.json
+work/*.txt
+.DS_Store
