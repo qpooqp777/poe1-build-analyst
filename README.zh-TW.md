@@ -4,6 +4,10 @@
 
 主動技能預設語言為英文。本地化文件請參考 [`README.zh-TW.md`](README.zh-TW.md)、[`README.zh-CN.md`](README.zh-CN.md)、[`SKILL.zh-TW.md`](SKILL.zh-TW.md) 與 [`SKILL.zh-CN.md`](SKILL.zh-CN.md)。
 
+## 儲存庫版本
+
+本儲存庫目前追蹤的發布候選版本為 **0.1.2**，版本來源記錄在 [`VERSION`](VERSION)。在明確發布更新套件之前，ClawHub 仍維持 `0.1.1`；不可將此檔案的版本直接視為 ClawHub registry 版本。
+
 ## 功能
 
 產生器可接收聯盟、主技能、職業／昇華、遊戲模式、經濟環境、預算與目標。它會取得或接收合法的 Ninja JSON 快照、篩選候選、解釋排名，並在本機具備 PoB Community 根目錄與 LuaJIT 時驗證選定的 PoB XML。

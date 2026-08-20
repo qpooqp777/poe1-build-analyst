@@ -4,6 +4,10 @@ This skill generates reproducible **Endgame-only** Path of Exile 1 analyses for 
 
 The active default language is English. Localized documentation is available in [`README.zh-TW.md`](README.zh-TW.md), [`README.zh-CN.md`](README.zh-CN.md), [`SKILL.zh-TW.md`](SKILL.zh-TW.md), and [`SKILL.zh-CN.md`](SKILL.zh-CN.md).
 
+## Repository version
+
+The release candidate tracked in this repository is **0.1.2**, recorded in [`VERSION`](VERSION). ClawHub remains at `0.1.1` until the updated package is explicitly published; do not infer the registry version from this file.
+
 ## What it does
 
 The generator accepts a league, main skill, class or ascendancy, game mode, economy, budget, and goal. It collects or accepts a permitted Ninja JSON snapshot, filters candidates, explains the ranking, and verifies selected PoB XML files when the local PoB Community root and LuaJIT are available.
