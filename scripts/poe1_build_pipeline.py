@@ -11,6 +11,7 @@ import argparse
 import base64
 import json
 import os
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -52,9 +53,43 @@ def score_row(row: dict[str, Any]) -> float:
     return 0.0
 
 
-def run_pob(args: list[str]) -> tuple[int, str, str]:
-    completed = subprocess.run(args, text=True, capture_output=True, check=False)
-    return completed.returncode, completed.stdout, completed.stderr
+MAX_POB_OUTPUT = 2_000_000
+
+
+def resolve_pob_command() -> str:
+    """Resolve only the intended `pob` executable; never execute user-supplied commands."""
+    command = shutil.which("pob")
+    if not command or Path(command).name != "pob" or not os.access(command, os.X_OK):
+        raise RuntimeError("找不到受信任的 pob 執行檔；本 skill 不接受自訂或任意外部命令")
+    return str(Path(command).resolve())
+
+
+def run_pob(args: list[str], timeout: int = 120) -> tuple[int, str, str]:
+    """Run the fixed PoB CLI with bounded runtime and captured output."""
+    command = resolve_pob_command()
+    if not args or Path(args[0]).name != "pob":
+        raise ValueError("拒絕執行非 pob 命令")
+    safe_args = [command, *args[1:]]
+    try:
+        completed = subprocess.run(
+            safe_args, text=True, capture_output=True, check=False,
+            timeout=max(1, min(timeout, 600)), cwd=os.getcwd()
+        )
+    except subprocess.TimeoutExpired as exc:
+        stdout = (exc.stdout or "")[-MAX_POB_OUTPUT:]
+        stderr = (exc.stderr or "")[-MAX_POB_OUTPUT:]
+        raise RuntimeError(f"pob-cli 執行逾時：stdout={stdout!r} stderr={stderr!r}") from exc
+    return completed.returncode, completed.stdout[-MAX_POB_OUTPUT:], completed.stderr[-MAX_POB_OUTPUT:]
+
+
+def parse_pob_json(stdout: str) -> dict[str, Any]:
+    """Accept only a bounded JSON object from PoB; reject arbitrary output."""
+    if len(stdout) > MAX_POB_OUTPUT:
+        raise ValueError("PoB 輸出超過安全大小上限")
+    value = json.loads(stdout)
+    if not isinstance(value, dict):
+        raise ValueError("PoB 輸出不是 JSON object；拒絕注入非預期資料")
+    return value
 
 
 def validate_tree_connectivity(build_path: str, pob_root: str) -> dict[str, Any]:
@@ -170,7 +205,7 @@ def endgame_analyze_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description='Analyze one fixed PoE1 Endgame character from a PoB code.')
     parser.add_argument('--pob-code', required=True, help='完整 PoB share/character code，或包含 code 的文字檔')
     parser.add_argument('--pob-root', default=os.environ.get('POB_ROOT'), required=True)
-    parser.add_argument('--pob-command', default='pob')
+    # Deliberately no --pob-command: only the trusted executable named `pob` is allowed.
     parser.add_argument('--skill', required=True)
     parser.add_argument('--class', dest='character_class', default='Witch')
     parser.add_argument('--ascendancy', default='Occultist')
@@ -187,8 +222,8 @@ def endgame_analyze_main(argv: list[str]) -> int:
             raise ValueError('解碼結果不是 PathOfBuilding XML')
         Path(args.xml_output).parent.mkdir(parents=True, exist_ok=True)
         Path(args.xml_output).write_bytes(xml)
-        analyze = run_pob([args.pob_command, 'analyze', args.xml_output, '--pob-root', args.pob_root, '--skill', args.skill, '--format', 'json', '--timeout', str(args.timeout)])
-        calc = run_pob([args.pob_command, 'calc', args.xml_output, '--pob-root', args.pob_root, '--skill', args.skill, '--format', 'json', '--timeout', str(args.timeout)])
+        analyze = run_pob(['pob', 'analyze', args.xml_output, '--pob-root', args.pob_root, '--skill', args.skill, '--format', 'json', '--timeout', str(args.timeout)], args.timeout)
+        calc = run_pob(['pob', 'calc', args.xml_output, '--pob-root', args.pob_root, '--skill', args.skill, '--format', 'json', '--timeout', str(args.timeout)], args.timeout)
         if analyze[0] != 0 or calc[0] != 0:
             raise RuntimeError(f'pob-cli analyze/calc 失敗：analyze={analyze[2] or analyze[1]} calc={calc[2] or calc[1]}')
         report = {
@@ -198,7 +233,7 @@ def endgame_analyze_main(argv: list[str]) -> int:
             'source': {'pob_code': 'provided', 'ninja_source': args.ninja_source, 'xml': str(Path(args.xml_output).resolve())},
             'stages': {'endgame': endgame_stage(args.skill, args.character_class, args.ascendancy)},
             'fixed_source_policy': {'tree': 'preserve imported character code', 'gems': 'preserve imported character code', 'items': 'preserve imported character code', 'early_mid': 'not generated'},
-            'pob_verification': {'status': 'verified', 'analyze': json.loads(analyze[1]), 'calc': json.loads(calc[1])},
+            'pob_verification': {'status': 'verified', 'analyze': parse_pob_json(analyze[1]), 'calc': parse_pob_json(calc[1])},
             'warnings': ['PoE Ninja DB/source is provenance only; imported character data is the fixed build authority.'],
         }
     except Exception as exc:
@@ -223,7 +258,7 @@ def main() -> int:
     parser.add_argument("--ninja-json", help="本地 JSON 或允許的 JSON URL")
     parser.add_argument("--build", help="PoB XML；若提供則執行官方 PoB 分析")
     parser.add_argument("--pob-root", default=os.environ.get("POB_ROOT"))
-    parser.add_argument("--pob-command", default="pob")
+    # Deliberately no --pob-command: only the trusted executable named `pob` is allowed.
     parser.add_argument("--output", required=True)
     parser.add_argument("--share-code", help="已由 pob share --dry-run 產生的 code；本腳本不會上傳")
     parser.add_argument("--limit", type=int, default=10)
@@ -268,12 +303,12 @@ def main() -> int:
                 Path(args.output).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
                 print(json.dumps({"output": args.output, "pob_status": "blocked", "tree_status": "failed"}, ensure_ascii=False))
                 return 2
-            base = [args.pob_command, "analyze", args.build, "--pob-root", args.pob_root, "--skill", args.skill, "--format", "json"]
+            base = ["pob", "analyze", args.build, "--pob-root", args.pob_root, "--skill", args.skill, "--format", "json"]
             rc, stdout, stderr = run_pob(base)
             if rc == 0:
                 try:
-                    report["pob_verification"] = {"status": "verified", "analysis": json.loads(stdout), "stderr": stderr}
-                except json.JSONDecodeError:
+                    report["pob_verification"] = {"status": "verified", "analysis": parse_pob_json(stdout), "stderr": stderr}
+                except (json.JSONDecodeError, ValueError):
                     report["pob_verification"] = {"status": "failed", "stdout": stdout, "stderr": stderr}
             else:
                 report["pob_verification"] = {"status": "failed", "returncode": rc, "stdout": stdout, "stderr": stderr}

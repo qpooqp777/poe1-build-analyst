@@ -153,12 +153,33 @@ def write_xml_with_nodes(source: str, destination: str, nodes: list[int]) -> Non
     tree.write(destination, encoding='utf-8', xml_declaration=True)
 
 
-def run_pob_calc(command: str, build: str, pob_root: str, skill: str) -> dict[str, Any]:
-    args = [command, 'calc', build, '--pob-root', pob_root, '--skill', skill, '--format', 'json', '--timeout', '120']
-    proc = subprocess.run(args, capture_output=True, text=True, check=False)
+MAX_POB_OUTPUT = 2_000_000
+
+
+def resolve_pob_command() -> str:
+    """Resolve only the intended `pob` executable; never execute user-supplied commands."""
+    command = shutil.which('pob')
+    if not command or Path(command).name != 'pob' or not os.access(command, os.X_OK):
+        raise RuntimeError('找不到受信任的 pob 執行檔；本 skill 不接受自訂或任意外部命令')
+    return str(Path(command).resolve())
+
+
+def run_pob_calc(build: str, pob_root: str, skill: str) -> dict[str, Any]:
+    args = [resolve_pob_command(), 'calc', build, '--pob-root', pob_root, '--skill', skill, '--format', 'json', '--timeout', '120']
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, check=False, timeout=120, cwd=os.getcwd())
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError('PoB calc 執行逾時') from exc
+    stdout = proc.stdout[-MAX_POB_OUTPUT:]
+    stderr = proc.stderr[-MAX_POB_OUTPUT:]
     if proc.returncode != 0:
-        raise RuntimeError(f'PoB calc 失敗：{proc.stderr or proc.stdout}')
-    return json.loads(proc.stdout)
+        raise RuntimeError(f'PoB calc 失敗：{stderr or stdout}')
+    if len(proc.stdout) > MAX_POB_OUTPUT:
+        raise RuntimeError('PoB calc 輸出超過安全大小上限')
+    value = json.loads(stdout)
+    if not isinstance(value, dict):
+        raise RuntimeError('PoB calc 輸出不是 JSON object')
+    return value
 
 
 def parser() -> argparse.ArgumentParser:
@@ -172,7 +193,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument('--exclude-node', type=int, action='append', default=[])
     p.add_argument('--build', help='Optional PoB XML; if supplied, write an optimized XML and run pob calc.')
     p.add_argument('--skill', default='Vortex')
-    p.add_argument('--pob-command', default='pob')
+    # Deliberately no --pob-command: only the trusted executable named `pob` is allowed.
     p.add_argument('--output-xml')
     p.add_argument('--output-json', required=True)
     return p
@@ -209,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
             raise SystemExit('--build 必須搭配 --output-xml')
         write_xml_with_nodes(args.build, args.output_xml, selected)
         result['output_xml'] = str(Path(args.output_xml).resolve())
-        result['pob_verification'] = {'status': 'verified', 'analysis': run_pob_calc(args.pob_command, args.output_xml, args.pob_root, args.skill)}
+        result['pob_verification'] = {'status': 'verified', 'analysis': run_pob_calc(args.output_xml, args.pob_root, args.skill)}
     Path(args.output_json).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output_json).write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps({'output_json': args.output_json, 'output_xml': result.get('output_xml'), 'tree_status': 'verified', 'pob_status': result['pob_verification']['status']}, ensure_ascii=False))
