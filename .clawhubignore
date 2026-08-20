@@ -1,0 +1,9 @@
+# Local development and generated artifacts
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+work/
+test_runs/
+publish-notes.md
+.DS_Store
